@@ -1,0 +1,6 @@
+__default__:
+  opts: "-q short"
+run_gatk4cnv:
+  opts: "-q long -l m_mem_free=30g -pe smp 8"
+call_snvs_pair:
+  opts: "-q long -l m_mem_free=6g -pe smp 2"

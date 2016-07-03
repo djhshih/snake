@@ -1,0 +1,112 @@
+import subprocess
+
+rule all:
+	input:
+		expand("acs/{sample_name}.rds", sample_name=config["pair_set"])
+
+rule run_gatk4cnv:
+	input:
+		sample_bam = "bam/{sample_name}.bam",
+		sample_bai = "bam/{sample_name}.bai",
+		ref_fasta = config["run_gatk4cnv"]["ref_fasta"],
+		targets_bed = config["run_gatk4cnv"]["targets_bed"],
+		pon = config["run_gatk4cnv"]["pon"],
+	params:
+		sample_name = "{sample_name}"
+	output:
+		seg = "gatk4cnv/cbs_seg/{sample_name}.seg",
+		copy_ratio = "gatk4cnv/tumor_pcov/{sample_name}.tn.tsv",	
+	shell:
+		"""
+		mkdir -p gatk4cnv/samples
+		echo '{input.sample_bam}' > gatk4cnv/samples/{params.sample_name}.txt
+		gatk4cnv \
+			-i gatk4cnv/samples/{params.sample_name}.txt \
+			--reference {input.ref_fasta} \
+			--intervalfile {input.targets_bed} \
+			--padding {config[run_gatk4cnv][padding]} \
+			--keepdups \
+			--ponfile {input.pon} \
+			--isnotusingponweights \
+			--rawcov \
+			--outputdir gatk4cnv \
+			--log_directory gatk4cnv/log
+		"""
+	
+rule call_snvs_pair:
+	input:
+		tumor_bam = "bam/{tumor_name}.bam",
+		normal_bam = "ref_bam/{tumor_name}_ref.bam",
+		tumor_bai = "bam/{tumor_name}.bai",
+		normal_bai = "ref_bam/{tumor_name}_ref.bai",
+	params:
+		tumor_name = "{tumor_name}",
+		normal_name = "{tumor_name}_ref",
+	output: 
+		callstats = "mutect/{tumor_name}.call_stats.txt",
+		coverage = "mutect/{tumor_name}.coverage.wig.txt",
+		power = "mutect/{tumor_name}.power.wig.txt",
+	version:
+		subprocess.check_output("mutect --version", shell=True)
+	shell:
+		"""
+		mkdir -p mutect
+		mutect \
+			--analysis_type 'MuTect' \
+			--tumor_sample_name {params.tumor_name} \
+			-I:tumor {input.tumor_bam} \
+			--normal_sample_name {params.normal_name} \
+			-I:normal {input.normal_bam} \
+			--reference_sequence {config[call_snvs_pair][ref_fasta]} \
+			--intervals {config[call_snvs_pair][interval_list]} \
+			--dbsnp {config[call_snvs_pair][dbsnp]} \
+			--cosmic {config[call_snvs_pair][cosmic]} \
+			--normal_panel {config[call_snvs_pair][normal_panel]} \
+			--out {output.callstats} \
+			--coverage_file {output.coverage} \
+			--power_file {output.power} \
+			--downsample_to_coverage 100000 \
+			--enable_extended_output \
+			--fraction_contamination 0.001
+		"""
+	
+# select tumor SNVs that occur at normal heterozygous sites
+rule select_normal_het_sites:
+	input:
+		callstats = rules.call_snvs_pair.output.callstats
+	output:
+		ghet_callstats = "snv_ghet/{tumor_name}_ghet.call_stats.txt"
+	shell:
+		"""
+		callstats_ghet-filter.r {input} {output} \
+			--snp {config[select_normal_het_sites][ref_snp]}
+		"""
+
+rule convert_callstats_to_cov:
+	input:
+		callstats = "{path}/{sample_name}.call_stats.txt"
+	output:
+		cov = "{path}/{sample_name}.cov"
+	shell:	
+		"callstats2cov.r {input} --output {output}"
+
+rule run_allelic_capseg:
+	input:
+		seg = rules.run_gatk4cnv.output.seg,
+		copy_ratio = rules.run_gatk4cnv.output.copy_ratio,
+		cov = "snv_ghet/{sample_name}_ghet.cov",
+	params:
+		sample_name = "{sample_name}"
+	output:
+		rds = "acs/{sample_name}.rds",
+		tsv = "acs/results/{sample_name}.tsv",
+	shell:
+		"""
+		acapseg.r \
+			--SID {params.sample_name} \
+			--capseg.probe.fn {input.copy_ratio} \
+			--capseg.seg.fn {input.seg} \
+			--germline.het.fn {input.cov} \
+			--base.output.dir acs
+		"""
+
