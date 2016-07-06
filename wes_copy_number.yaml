@@ -1,13 +1,14 @@
-pair_set:
-  LS-026-P: LS-026-N
-  LS-026-MT: LS-026-N
+pair_annotation: pair_annotation.tsv
+sample_annotation: sample_annotation.tsv
 ref_fasta: &ref_fasta "/seq/references/Homo_sapiens_assembly19/v1/Homo_sapiens_assembly19.fasta"
-run_gatk4cnv:
-  pon: "/xchip/scarter/dshih/local/opt/gatk4cnv-20160112/pons/ice_female_pd250/create_pon/ice_female_pd250_spark.pon"
+gatk4cnv:
+  pon:
+    XX: "/xchip/scarter/dshih/local/opt/gatk4cnv-20160112/pons/ice_female_pd250/create_pon/ice_female_pd250_spark.pon"
+    XY: "/xchip/scarter/dshih/local/opt/gatk4cnv-20160112/pons/ice_male_pd250/create_pon/ice_male_pd250_spark.pon"
   targets_bed: "/xchip/scarter/dshih/local/opt/gatk4cnv-20160112/targets/CRSP_ICE_hg19_wex_illumina_v1.no_Y_MT_PARs.bed"
   padding: 250
   ref_fasta: *ref_fasta
-call_snvs_pair:
+mutect_pair:
   interval_list: "/xchip/cga/reference/hg19/whole_exome_illumina_coding_v1_plus_10bp_padding_minus_mito.Homo_sapiens_assembly19.targets.interval_list"
   ref_fasta: *ref_fasta
   dbsnp: "/xchip/cga/reference/hg19/dbsnp_134_b37.leftAligned.vcf"

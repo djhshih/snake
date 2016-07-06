@@ -1,16 +1,38 @@
 import subprocess
+import pandas as pd
+
+pair_annot = pd.read_csv(config["pair_annotation"], sep="\t")
+pair_annot.index = pair_annot["first_id"]
+samples = list(pair_annot.index)
+
+sample_annot = pd.read_csv(config["sample_annotation"], sep="\t")
+sample_annot.index = sample_annot["sample_id"]
+
+def sex(sample_id):
+	"""Get biological sex of patient from whom the sample was taken"""
+	return sample_annot.loc[sample_id, "sex"]
+
+def bam_path(sample_id):
+	"""Get bam file path of sample"""
+	return sample_annot.loc[sample_id, "clean_bam_file_capture"]
+
+def	second_id(first_id):
+	"""Get the second sample of a pair"""
+	return pair_annot.loc[first_id, 'second_id']
+
+
 
 rule all:
 	input:
-		expand("acs/{sample_name}.rds", sample_name=config["pair_set"])
+		expand("acapseg/{sample_name}.AllelicCapseg.rds", sample_name=samples)
 
-rule run_gatk4cnv:
+rule gatk4cnv:
 	input:
 		sample_bam = "bam/{sample_name}.bam",
 		sample_bai = "bam/{sample_name}.bai",
-		ref_fasta = config["run_gatk4cnv"]["ref_fasta"],
-		targets_bed = config["run_gatk4cnv"]["targets_bed"],
-		pon = config["run_gatk4cnv"]["pon"],
+		ref_fasta = config["gatk4cnv"]["ref_fasta"],
+		targets_bed = config["gatk4cnv"]["targets_bed"],
+		pon = lambda x: config["gatk4cnv"]["pon"][sex(x.sample_name)]
 	params:
 		sample_name = "{sample_name}"
 	output:
@@ -24,7 +46,7 @@ rule run_gatk4cnv:
 			-i gatk4cnv/samples/{params.sample_name}.txt \
 			--reference {input.ref_fasta} \
 			--intervalfile {input.targets_bed} \
-			--padding {config[run_gatk4cnv][padding]} \
+			--padding {config[gatk4cnv][padding]} \
 			--keepdups \
 			--ponfile {input.pon} \
 			--isnotusingponweights \
@@ -33,80 +55,86 @@ rule run_gatk4cnv:
 			--log_directory gatk4cnv/log
 		"""
 	
-rule call_snvs_pair:
+rule mutect_pair:
 	input:
-		tumor_bam = "bam/{tumor_name}.bam",
-		normal_bam = "ref_bam/{tumor_name}_ref.bam",
-		tumor_bai = "bam/{tumor_name}.bai",
-		normal_bai = "ref_bam/{tumor_name}_ref.bai",
+		tumor_bam = "bam/{sample_name}.bam",
+		normal_bam = lambda x: "bam/{0}.bam".format(second_id(x.sample_name)),
+		tumor_bai = "bam/{sample_name}.bai",
+		normal_bai = lambda x: "bam/{0}.bai".format(second_id(x.sample_name)),
 	params:
-		tumor_name = "{tumor_name}",
-		normal_name = "{tumor_name}_ref",
+		tumor_name = "{sample_name}",
+		normal_name = lambda x: second_id(x.sample_name),
 	output: 
-		callstats = "mutect/{tumor_name}.call_stats.txt",
-		coverage = "mutect/{tumor_name}.coverage.wig.txt",
-		power = "mutect/{tumor_name}.power.wig.txt",
+		callstats = "mutect/{sample_name}.callstats.txt",
+		coverage = "mutect/{sample_name}.coverage.wig.txt",
+		power = "mutect/{sample_name}.power.wig.txt",
 	version:
 		subprocess.check_output("mutect --version", shell=True)
 	shell:
 		"""
-		mkdir -p mutect
+		mkdir -p mutect/log
 		mutect \
 			--analysis_type 'MuTect' \
 			--tumor_sample_name {params.tumor_name} \
-			-I:tumor {input.tumor_bam} \
 			--normal_sample_name {params.normal_name} \
+			-I:tumor {input.tumor_bam} \
 			-I:normal {input.normal_bam} \
-			--reference_sequence {config[call_snvs_pair][ref_fasta]} \
-			--intervals {config[call_snvs_pair][interval_list]} \
-			--dbsnp {config[call_snvs_pair][dbsnp]} \
-			--cosmic {config[call_snvs_pair][cosmic]} \
-			--normal_panel {config[call_snvs_pair][normal_panel]} \
+			--reference_sequence {config[mutect_pair][ref_fasta]} \
+			--intervals {config[mutect_pair][interval_list]} \
+			--dbsnp {config[mutect_pair][dbsnp]} \
+			--cosmic {config[mutect_pair][cosmic]} \
+			--normal_panel {config[mutect_pair][normal_panel]} \
 			--out {output.callstats} \
 			--coverage_file {output.coverage} \
 			--power_file {output.power} \
 			--downsample_to_coverage 100000 \
 			--enable_extended_output \
-			--fraction_contamination 0.001
+			--fraction_contamination 0.001 \
+			2>&1 | tee mutect/log/{params.tumor_name}.log
 		"""
 	
 # select tumor SNVs that occur at normal heterozygous sites
 rule select_normal_het_sites:
 	input:
-		callstats = rules.call_snvs_pair.output.callstats
+		callstats = rules.mutect_pair.output.callstats
+	params:
+		sample_name = "{sample_name}",
 	output:
-		ghet_callstats = "snv_ghet/{tumor_name}_ghet.call_stats.txt"
+		ghet_callstats = "snv_ghet/{sample_name}_ghet.callstats.txt"
 	shell:
 		"""
+		mkdir -p snv_ghet/log
 		callstats_ghet-filter.r {input} {output} \
-			--snp {config[select_normal_het_sites][ref_snp]}
+			2>&1 | tee snv_ghet/{params.sample_name}_ghet.callstats.log
 		"""
 
 rule convert_callstats_to_cov:
 	input:
-		callstats = "{path}/{sample_name}.call_stats.txt"
+		callstats = "{path}/{sample_name}.callstats.txt"
 	output:
 		cov = "{path}/{sample_name}.cov"
 	shell:	
 		"callstats2cov.r {input} --output {output}"
 
-rule run_allelic_capseg:
+rule allelic_capseg:
 	input:
-		seg = rules.run_gatk4cnv.output.seg,
-		copy_ratio = rules.run_gatk4cnv.output.copy_ratio,
+		seg = rules.gatk4cnv.output.seg,
+		copy_ratio = rules.gatk4cnv.output.copy_ratio,
 		cov = "snv_ghet/{sample_name}_ghet.cov",
 	params:
 		sample_name = "{sample_name}"
 	output:
-		rds = "acs/{sample_name}.rds",
-		tsv = "acs/results/{sample_name}.tsv",
+		rds = "acapseg/{sample_name}.AllelicCapseg.rds",
+		tsv = "acapseg/results/{sample_name}.tsv",
 	shell:
 		"""
+		mkdir -p acapseg/log
 		acapseg.r \
 			--SID {params.sample_name} \
 			--capseg.probe.fn {input.copy_ratio} \
 			--capseg.seg.fn {input.seg} \
 			--germline.het.fn {input.cov} \
-			--base.output.dir acs
+			--base.output.dir acapseg
+			2>&1 | tee acapseg/log/{params.sample_name}.log
 		"""
 
