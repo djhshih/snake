@@ -1,9 +1,9 @@
 __default__:
   opts: "-q short"
 gatk4cnv:
-  opts: "-q long -l m_mem_free=18g -pe smp 5"
+  opts: "-q long -l m_mem_free=30G -pe smp 5"
 mutect_pair:
-  opts: "-q long -t 24:00 -l m_mem_free=8g"
+  opts: "-q long -t 24:00 -l m_mem_free=6g"
 select_normal_het_sites:
   opts: "-q short -l m_mem_free=2g"
 allelic_capseg:

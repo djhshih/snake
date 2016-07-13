@@ -2,7 +2,7 @@ import subprocess
 import pandas as pd
 
 pair_annot = pd.read_csv(config["pair_annotation"], sep="\t")
-pair_annot.index = pair_annot["first_id"]
+pair_annot.index = pair_annot["case_id"]
 samples = list(pair_annot.index)
 
 sample_annot = pd.read_csv(config["sample_annotation"], sep="\t")
@@ -16,9 +16,9 @@ def bam_path(sample_id):
 	"""Get bam file path of sample"""
 	return sample_annot.loc[sample_id, "clean_bam_file_capture"]
 
-def	second_id(first_id):
+def	control_id(case_id):
 	"""Get the second sample of a pair"""
-	return pair_annot.loc[first_id, 'second_id']
+	return pair_annot.loc[case_id, 'control_id']
 
 
 
@@ -37,7 +37,9 @@ rule gatk4cnv:
 		sample_name = "{sample_name}"
 	output:
 		seg = "gatk4cnv/cbs_seg/{sample_name}.seg",
+		seg_status = "gatk4cnv/cbs_seg/.{sample_name}.seg.done",
 		copy_ratio = "gatk4cnv/tumor_pcov/{sample_name}.tn.tsv",	
+		copy_ratio_status = "gatk4cnv/tumor_pcov/.{sample_name}.tn.tsv.done",	
 	shell:
 		"""
 		mkdir -p gatk4cnv/samples
@@ -52,18 +54,19 @@ rule gatk4cnv:
 			--isnotusingponweights \
 			--rawcov \
 			--outputdir gatk4cnv \
-			--log_directory gatk4cnv/log
+			--log_directory gatk4cnv/log \
+			--jobReport gatk4cnv/log/{params.sample_name}
 		"""
 	
 rule mutect_pair:
 	input:
 		tumor_bam = "bam/{sample_name}.bam",
-		normal_bam = lambda x: "bam/{0}.bam".format(second_id(x.sample_name)),
+		normal_bam = lambda x: "bam/{0}.bam".format(control_id(x.sample_name)),
 		tumor_bai = "bam/{sample_name}.bai",
-		normal_bai = lambda x: "bam/{0}.bai".format(second_id(x.sample_name)),
+		normal_bai = lambda x: "bam/{0}.bai".format(control_id(x.sample_name)),
 	params:
 		tumor_name = "{sample_name}",
-		normal_name = lambda x: second_id(x.sample_name),
+		normal_name = lambda x: control_id(x.sample_name),
 	output: 
 		callstats = "mutect/{sample_name}.callstats.txt",
 		coverage = "mutect/{sample_name}.coverage.wig.txt",
@@ -98,7 +101,7 @@ rule select_normal_het_sites:
 	input:
 		callstats = rules.mutect_pair.output.callstats
 	params:
-		sample_name = "{sample_name}",
+		sample_name = "{sample_name}"
 	output:
 		ghet_callstats = "snv_ghet/{sample_name}_ghet.callstats.txt"
 	shell:
